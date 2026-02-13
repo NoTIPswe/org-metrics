@@ -1,0 +1,21 @@
+name: 'Setup Python with Metric Dependencies'
+description: 'Sets up Python and installs dependencies for a metric directory'
+
+inputs:
+  metric-directory:
+    description: 'The directory containing the metric code and requirements.txt'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.14'
+        cache: 'pip'
+        cache-dependency-path: ${{ inputs.metric-directory }}/requirements.txt
+
+    - name: Install dependencies
+      shell: bash
+      run: pip install -r ${{ inputs.metric-directory }}/requirements.txt

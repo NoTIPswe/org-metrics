@@ -1,0 +1,4 @@
+# Dependencies for commit-message-quality metric
+requests
+gspread
+google-auth

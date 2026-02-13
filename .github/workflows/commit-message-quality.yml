@@ -1,0 +1,25 @@
+name: Calculate Commit Message Quality and send it to Dashboard
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Every day at 00:00
+  workflow_dispatch:
+
+jobs:
+  compute-commit-message-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python with Dependencies
+        uses: ./.github/actions/setup-python-metric
+        with:
+          metric-directory: commit-message-quality
+
+      - name: Run Script
+        env:
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+          ORG_GITHUB_TOKEN: ${{ secrets.ORG_GITHUB_TOKEN }}
+          GITHUB_ORG: ${{ github.repository_owner }}
+        run: python commit-message-quality/commit-message-quality.py
