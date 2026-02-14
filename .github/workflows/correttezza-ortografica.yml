@@ -22,7 +22,7 @@ jobs:
       - name: Setup Python with Dependencies
         uses: ./.github/actions/setup-python-metric
         with:
-          metric-directory: spelling-quality
+          metric-directory: correttezza-ortografica
 
       - name: Install Dependencies
         run: |
