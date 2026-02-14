@@ -26,6 +26,8 @@ jobs:
 
       - name: Install Dependencies
         run: |
+          sudo apt-get update
+          sudo apt-get install -y hunspell
           pip install gspread google-auth
           pip install -r docs-repo/notipdo/requirements.txt
           pip install -e docs-repo/notipdo/

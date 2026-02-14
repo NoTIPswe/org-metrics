@@ -35,7 +35,7 @@ def append_to_google_sheet(voto_qualita: float, errori_totali: int, credentials:
     except gspread.WorksheetNotFound:
         print(f"Foglio '{nome_foglio}' non trovato. Creo uno dedicato...")
         worksheet = spreadsheet.add_worksheet(title=nome_foglio, rows=1000, cols=3)
-        worksheet.update("A1:C1", [["Timestamp", "Voto Qualita", "Numero Errori"]])
+        worksheet.update(values=[["Timestamp", "Voto Qualita", "Numero Errori"]], range_name="A1:C1"
 
     timestamp: str = datetime.now(timezone.utc).isoformat()
 
