@@ -28,9 +28,18 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y hunspell hunspell-it
+
+          curl -L -o typstyle https://github.com/typstyle-rs/typstyle/releases/download/v0.14.0/typstyle-x86_64-unknown-linux-musl
+          chmod +x typstyle
+          sudo mv typstyle /usr/local/bin
+
           pip install gspread google-auth
           pip install -r docs-repo/notipdo/requirements.txt
           pip install -e docs-repo/notipdo/
+
+          curl -L -o typstyle https://github.com/typstyle-rs/typstyle/releases/download/v0.14.0/typstyle-x86_64-unknown-linux-musl
+          chmod +x typstyle
+          sudo mv typstyle /usr/local/bin
 
       - name: Run Script
         env:
