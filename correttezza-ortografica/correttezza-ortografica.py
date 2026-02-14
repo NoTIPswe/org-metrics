@@ -57,6 +57,9 @@ def main() -> None:
     try:
         result = subprocess.run(command, cwd=docs_repo_path, capture_output=True, text=True, check=False)
         output = result.stdout + "\n" + result.stderr
+        print("--- LOG RAW DI NOTIPDO ---")
+        print(output)
+        print("--------------------------")
     except FileNotFoundError:
         print("ERRORE: 'notipdo' non trovato. Controlla lo step 'Install Dependencies' nello YAML.")
         exit(1)
