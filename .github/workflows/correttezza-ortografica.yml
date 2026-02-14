@@ -24,9 +24,6 @@ jobs:
         with:
           metric-directory: correttezza-ortografica
 
-      - name: Install Typst
-        uses: typst-community/setup-typst@v3
-
       - name: Install Dependencies
         run: |
           sudo apt-get update
