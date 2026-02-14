@@ -1,0 +1,37 @@
+name: Calculate MP12 Spelling Quality
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  compute-spelling-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Metrics Repository
+        uses: actions/checkout@v4
+
+      - name: Checkout Documentation Repository
+        uses: actions/checkout@v4
+        with:
+          repository: NoTIPswe/RepoDocumentale
+          token: ${{ secrets.ORG_GITHUB_TOKEN }}
+          path: docs-repo
+
+      - name: Setup Python with Dependencies
+        uses: ./.github/actions/setup-python-metric
+        with:
+          metric-directory: spelling-quality
+
+      - name: Install Dependencies
+        run: |
+          pip install gspread google-auth
+          pip install -r docs-repo/notipdo/requirements.txt
+          pip install -e docs-repo/notipdo/
+
+      - name: Run Script
+        env:
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+          DOCS_REPO_PATH: ./docs-repo
+        run: python correttezza-ortografica/correttezza-ortografica.py
