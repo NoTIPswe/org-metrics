@@ -1,3 +1,5 @@
+import argparse
+from datetime import datetime
 import json
 import os
 import sys
@@ -133,10 +135,9 @@ def safe_div(numerator, denominator):
     return numerator / denominator
 
 
-def print_summary(df):
-    if df.empty:
-        print("Nessuna issue trovata.")
-        return
+def compute_metrics(df, days_elapsed=None):
+    if days_elapsed is None:
+        days_elapsed = PROJECT_DAYS_ELAPSED
 
     total_pv = df["PV (€)"].sum()
     total_ev = df["EV (€)"].sum()
@@ -147,33 +148,100 @@ def print_summary(df):
     eac = total_ac + safe_div(BAC - total_ev, cpi)
     etc = eac - total_ac
     teac = safe_div(PROJECT_PLANNED_DAYS, spi)
-    burn_rate = safe_div(total_ac, PROJECT_DAYS_ELAPSED)
+    burn_rate = safe_div(total_ac, days_elapsed)
+
+    return {
+        "EV (€)": round(total_ev, 2),
+        "PV (€)": round(total_pv, 2),
+        "AC (€)": round(total_ac, 2),
+        "CPI": round(cpi, 2),
+        "SPI": round(spi, 2),
+        "EAC (€)": round(eac, 2),
+        "ETC (€)": round(etc, 2),
+        "TEAC (giorni)": round(teac, 2),
+        "Burn Rate (€/giorno)": round(burn_rate, 2),
+    }
+
+
+def print_summary(df):
+    if df.empty:
+        print("Nessuna issue trovata.")
+        return
+
+    m = compute_metrics(df)
 
     print(f" Sprint target: {SPRINT_NAME}")
     print(f" BAC (Budget At Completion): € {BAC:,.2f}")
-    print(f" [MP01] Earned Value  (EV):      € {total_ev:>10,.2f}")
-    print(f" [MP02] Planned Value (PV):      € {total_pv:>10,.2f}")
-    print(f" [MP03] Actual Cost   (AC):      € {total_ac:>10,.2f}")
-    print(f" [MP04] Cost Perf. Index (CPI):      {cpi:>10.2f}")
-    print(f" [MP05] Schedule Perf. Idx (SPI):    {spi:>10.2f}")
-    print(f" [MP06] Estimate At Completion:  € {eac:>10,.2f}")
-    print(f" [MP07] Estimate To Complete:    € {etc:>10,.2f}")
-    print(f" [MP08] Time Est. At Compl.:     {teac:>10.2f} giorni")
-    print(f" [MP09] Budget Burn Rate:        € {burn_rate:>10,.2f} / giorno")
+    print(f" [MP01] Earned Value  (EV):      € {m['EV (€)']:>10,.2f}")
+    print(f" [MP02] Planned Value (PV):      € {m['PV (€)']:>10,.2f}")
+    print(f" [MP03] Actual Cost   (AC):      € {m['AC (€)']:>10,.2f}")
+    print(f" [MP04] Cost Perf. Index (CPI):      {m['CPI']:>10.2f}")
+    print(f" [MP05] Schedule Perf. Idx (SPI):    {m['SPI']:>10.2f}")
+    print(f" [MP06] Estimate At Completion:  € {m['EAC (€)']:>10,.2f}")
+    print(f" [MP07] Estimate To Complete:    € {m['ETC (€)']:>10,.2f}")
+    print(f" [MP08] Time Est. At Compl.:     {m['TEAC (giorni)']:>10.2f} giorni")
+    print(f" [MP09] Budget Burn Rate:        € {m['Burn Rate (€/giorno)']:>10,.2f} / giorno")
+
+
+def parse_sprint_date(date_str):
+    """Parse a Jira sprint date string (ISO 8601) to a date object."""
+    return datetime.fromisoformat(date_str.replace("Z", "+00:00")).date()
+
+
+def export_all_sprints(jira, output_file):
+    sprints = get_project_sprints(jira)
+    if not sprints:
+        print("Nessuno sprint trovato.")
+        sys.exit(1)
+
+    project_start = parse_sprint_date(sprints[0].startDate)
+
+    rows = []
+    cumulative_ids = []
+    for sprint in sprints:
+        cumulative_ids.append(sprint.id)
+        issues = fetch_issues(jira, cumulative_ids)
+        df = build_dataframe(issues)
+        if df.empty:
+            continue
+
+        sprint_end = parse_sprint_date(sprint.endDate)
+        days_elapsed = (sprint_end - project_start).days
+
+        m = compute_metrics(df, days_elapsed=days_elapsed)
+        m["Sprint"] = sprint.name
+        m["BAC (€)"] = BAC
+        rows.append(m)
+        print(f"  {sprint.name}: EV={m['EV (€)']}, PV={m['PV (€)']}, AC={m['AC (€)']}")
+
+    result = pd.DataFrame(rows)
+    cols = ["Sprint", "BAC (€)", "EV (€)", "PV (€)", "AC (€)",
+            "CPI", "SPI", "EAC (€)", "ETC (€)", "TEAC (giorni)", "Burn Rate (€/giorno)"]
+    result = result[cols]
+    result.to_csv(output_file, index=False, sep=";")
+    print(f"\nCSV esportato: {output_file}")
 
 
 def main():
+    parser = argparse.ArgumentParser(description="EVM metrics from Jira")
+    parser.add_argument(
+        "--export-csv",
+        metavar="FILE",
+        help="Esporta le metriche cumulative di tutti gli sprint in un file CSV",
+    )
+    args = parser.parse_args()
+
     print(f"Connecting to {JIRA_URL} ...")
     jira = connect_jira()
 
-    sprint_ids = get_sprints_up_to(jira, SPRINT_NAME)
-    print(f"Sprints: {len(sprint_ids)}")
-
-    issues = fetch_issues(jira, sprint_ids)
-
-    df = build_dataframe(issues)
-
-    print_summary(df)
+    if args.export_csv:
+        export_all_sprints(jira, args.export_csv)
+    else:
+        sprint_ids = get_sprints_up_to(jira, SPRINT_NAME)
+        print(f"Sprints: {len(sprint_ids)}")
+        issues = fetch_issues(jira, sprint_ids)
+        df = build_dataframe(issues)
+        print_summary(df)
 
 
 if __name__ == "__main__":
