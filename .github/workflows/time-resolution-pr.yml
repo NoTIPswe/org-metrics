@@ -1,0 +1,24 @@
+name: Calculate The Resolution Time From PR POV
+
+on:
+  schedule:
+    - cron: "0 0 * * *" # Every day at 00:00
+  workflow_dispatch:
+
+jobs:
+  compute-time-process-org:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python with Dependencies
+        uses: ./.github/actions/setup-python-metric
+        with:
+          metric-directory: time-resolution-pr
+
+      - name: Run Script
+        env:
+          ORG_GITHUB_TOKEN: ${{ secrets.ORG_GITHUB_TOKEN }}
+          GITHUB_ORG: ${{ github.repository_owner }}
+        run: python time-resolution-pr/time-resolution-pr.py
