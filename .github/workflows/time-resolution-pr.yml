@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  compute-time-process-org:
+  compute-time-resolution-pr:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
