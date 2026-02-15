@@ -1,30 +1,37 @@
 import argparse
-from datetime import datetime
+from datetime import date, datetime, timezone
 import json
 import os
 import sys
 
 from dotenv import load_dotenv
+from google.oauth2.service_account import Credentials
+import gspread
 from jira import JIRA
 import pandas as pd
 
 load_dotenv()
 
 # ── Configuration ────────────────────────────
-JIRA_URL = os.environ["JIRA_URL"]
+JIRA_URL = os.environ.get("JIRA_URL", "https://notipswe.atlassian.net")
 JIRA_EMAIL = os.environ["JIRA_EMAIL"]
 JIRA_TOKEN = os.environ["JIRA_TOKEN"]
 
-PROJECT_KEY = os.environ.get("JIRA_PROJECT_KEY", "NT")
-SPRINT_NAME = os.environ["JIRA_SPRINT_NAME"]
-ROLE_FIELD_ID = os.environ.get("JIRA_ROLE_FIELD_ID", "customfield_10050")
+PROJECT_KEY = "NT"
+ROLE_FIELD_ID = "customfield_10041"
 
-BAC = float(os.environ["JIRA_BAC"])
-HOURLY_RATES = json.loads(os.environ["JIRA_HOURLY_RATES"])
-DEFAULT_RATE = float(os.environ.get("JIRA_DEFAULT_RATE", "35"))
+BAC = 12940.0
+HOURLY_RATES = {
+    "Responsabile": 30,
+    "Verificatore": 15,
+    "Analista": 25,
+    "Amministratore": 20,
+    "Progettista": 25,
+    "Programmatore": 15,
+}
+DEFAULT_RATE = 35.0
 
-PROJECT_PLANNED_DAYS = int(os.environ["JIRA_PROJECT_PLANNED_DAYS"])
-PROJECT_DAYS_ELAPSED = int(os.environ["JIRA_PROJECT_DAYS_ELAPSED"])
+PROJECT_PLANNED_DAYS = 156
 
 
 def connect_jira():
@@ -135,10 +142,7 @@ def safe_div(numerator, denominator):
     return numerator / denominator
 
 
-def compute_metrics(df, days_elapsed=None):
-    if days_elapsed is None:
-        days_elapsed = PROJECT_DAYS_ELAPSED
-
+def compute_metrics(df, days_elapsed):
     total_pv = df["PV (€)"].sum()
     total_ev = df["EV (€)"].sum()
     total_ac = df["AC (€)"].sum()
@@ -163,14 +167,14 @@ def compute_metrics(df, days_elapsed=None):
     }
 
 
-def print_summary(df):
+def print_summary(df, sprint_name, days_elapsed):
     if df.empty:
         print("Nessuna issue trovata.")
         return
 
-    m = compute_metrics(df)
+    m = compute_metrics(df, days_elapsed)
 
-    print(f" Sprint target: {SPRINT_NAME}")
+    print(f" Sprint target: {sprint_name}")
     print(f" BAC (Budget At Completion): € {BAC:,.2f}")
     print(f" [MP01] Earned Value  (EV):      € {m['EV (€)']:>10,.2f}")
     print(f" [MP02] Planned Value (PV):      € {m['PV (€)']:>10,.2f}")
@@ -183,43 +187,102 @@ def print_summary(df):
     print(f" [MP09] Budget Burn Rate:        € {m['Burn Rate (€/giorno)']:>10,.2f} / giorno")
 
 
-def parse_sprint_date(date_str):
-    """Parse a Jira sprint date string (ISO 8601) to a date object."""
-    return datetime.fromisoformat(date_str.replace("Z", "+00:00")).date()
+
+def get_google_credentials():
+    """Get Google credentials from environment."""
+    creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+    if not creds_json:
+        raise ValueError("GOOGLE_CREDENTIALS_JSON environment variable is not set")
+
+    creds_info = json.loads(creds_json)
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    return Credentials.from_service_account_info(creds_info, scopes=scopes)
 
 
-def export_all_sprints(jira, output_file):
+def append_to_google_sheet(metrics):
+    """Append the EVM metrics and timestamp to the Google Sheet."""
+    credentials = get_google_credentials()
+    client = gspread.authorize(credentials)
+
+    spreadsheet = client.open("notip-dashboard")
+
+    worksheet_name = "evm-jira"
+    try:
+        worksheet = spreadsheet.worksheet(worksheet_name)
+    except gspread.WorksheetNotFound:
+        worksheet = spreadsheet.add_worksheet(
+            title=worksheet_name, rows=1000, cols=12
+        )
+        headers = ["Timestamp", "BAC (€)", "EV (€)", "PV (€)", "AC (€)",
+                    "CPI", "SPI", "EAC (€)", "ETC (€)", "TEAC (giorni)", "Burn Rate (€/giorno)"]
+        worksheet.update("A1:K1", [headers])
+
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    row = [
+        timestamp,
+        metrics["BAC (€)"],
+        metrics["EV (€)"],
+        metrics["PV (€)"],
+        metrics["AC (€)"],
+        metrics["CPI"],
+        metrics["SPI"],
+        metrics["EAC (€)"],
+        metrics["ETC (€)"],
+        metrics["TEAC (giorni)"],
+        metrics["Burn Rate (€/giorno)"],
+    ]
+    worksheet.append_row(row)
+    print(f"Appended to Google Sheet: {timestamp}")
+
+
+def compute_days_elapsed(sprints):
+    """Calculate days elapsed from the start of the first sprint to today."""
+    start_str = sprints[0].startDate
+    project_start = datetime.fromisoformat(start_str.replace("Z", "+00:00")).date()
+    return (date.today() - project_start).days
+
+
+def collect_cumulative_metrics(jira):
+    """Fetch all sprints and compute cumulative EVM metrics."""
     sprints = get_project_sprints(jira)
     if not sprints:
         print("Nessuno sprint trovato.")
         sys.exit(1)
 
-    project_start = parse_sprint_date(sprints[0].startDate)
+    days_elapsed = compute_days_elapsed(sprints)
+    sprint_ids = [s.id for s in sprints]
+    issues = fetch_issues(jira, sprint_ids)
+    df = build_dataframe(issues)
 
-    rows = []
-    cumulative_ids = []
-    for sprint in sprints:
-        cumulative_ids.append(sprint.id)
-        issues = fetch_issues(jira, cumulative_ids)
-        df = build_dataframe(issues)
-        if df.empty:
-            continue
+    if df.empty:
+        print("Nessuna issue trovata.")
+        sys.exit(1)
 
-        sprint_end = parse_sprint_date(sprint.endDate)
-        days_elapsed = (sprint_end - project_start).days
+    m = compute_metrics(df, days_elapsed)
+    m["BAC (€)"] = BAC
+    return m
 
-        m = compute_metrics(df, days_elapsed=days_elapsed)
-        m["Sprint"] = sprint.name
-        m["BAC (€)"] = BAC
-        rows.append(m)
-        print(f"  {sprint.name}: EV={m['EV (€)']}, PV={m['PV (€)']}, AC={m['AC (€)']}")
 
-    result = pd.DataFrame(rows)
-    cols = ["Sprint", "BAC (€)", "EV (€)", "PV (€)", "AC (€)",
+def export_snapshot(jira, output_file):
+    """Exports a single row with the current timestamp and cumulative EVM metrics."""
+    m = collect_cumulative_metrics(jira)
+    m["Timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    cols = ["Timestamp", "BAC (€)", "EV (€)", "PV (€)", "AC (€)",
             "CPI", "SPI", "EAC (€)", "ETC (€)", "TEAC (giorni)", "Burn Rate (€/giorno)"]
-    result = result[cols]
-    result.to_csv(output_file, index=False, sep=";")
-    print(f"\nCSV esportato: {output_file}")
+
+    row_df = pd.DataFrame([m])[cols]
+
+    write_header = not os.path.exists(output_file)
+    row_df.to_csv(output_file, mode="a", index=False, sep=";", header=write_header)
+
+    print(f"\nSnapshot aggiunto a: {output_file}")
+    for c in cols:
+        print(f"  {c}: {m[c]}")
 
 
 def main():
@@ -227,7 +290,12 @@ def main():
     parser.add_argument(
         "--export-csv",
         metavar="FILE",
-        help="Esporta le metriche cumulative di tutti gli sprint in un file CSV",
+        help="Esporta uno snapshot con timestamp delle metriche cumulative (append se il file esiste)",
+    )
+    parser.add_argument(
+        "--google-sheet",
+        action="store_true",
+        help="Invia le metriche cumulative al Google Sheet notip-dashboard/evm-jira",
     )
     args = parser.parse_args()
 
@@ -235,13 +303,22 @@ def main():
     jira = connect_jira()
 
     if args.export_csv:
-        export_all_sprints(jira, args.export_csv)
+        export_snapshot(jira, args.export_csv)
+    elif args.google_sheet:
+        m = collect_cumulative_metrics(jira)
+        append_to_google_sheet(m)
     else:
-        sprint_ids = get_sprints_up_to(jira, SPRINT_NAME)
+        sprint_name = os.environ.get("JIRA_SPRINT_NAME")
+        if not sprint_name:
+            print("JIRA_SPRINT_NAME non impostata. Usa --google-sheet o --export-csv.")
+            sys.exit(1)
+        sprints = get_project_sprints(jira)
+        days_elapsed = compute_days_elapsed(sprints)
+        sprint_ids = get_sprints_up_to(jira, sprint_name)
         print(f"Sprints: {len(sprint_ids)}")
         issues = fetch_issues(jira, sprint_ids)
         df = build_dataframe(issues)
-        print_summary(df)
+        print_summary(df, sprint_name, days_elapsed)
 
 
 if __name__ == "__main__":

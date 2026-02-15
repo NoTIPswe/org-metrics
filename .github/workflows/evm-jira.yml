@@ -1,0 +1,25 @@
+name: Calculate EVM Jira Metrics and send to Dashboard
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  compute-evm-jira:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python with Dependencies
+        uses: ./.github/actions/setup-python-metric
+        with:
+          metric-directory: evm-jira
+
+      - name: Run Script
+        env:
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_TOKEN: ${{ secrets.JIRA_TOKEN }}
+        run: python evm-jira/evm-jira.py --google-sheet

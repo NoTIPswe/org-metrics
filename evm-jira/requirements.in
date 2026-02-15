@@ -1,3 +1,5 @@
 jira
 pandas
 python-dotenv
+gspread
+google-auth
