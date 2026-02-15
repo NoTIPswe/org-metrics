@@ -11,101 +11,84 @@ load_dotenv()
 TARGET_REPO = "RepoDocumentale"
 SPREADSHEET_NAME = "notip-dashboard"
 SHEET_NAME = "time-resolution-pr"
-LOOKBACK_DAYS = 14
 
-def get_env_var(name):
-    val = os.environ.get(name)
-    if not val:
-        raise ValueError(f"Ambiente non configurato: {name} manca.")
-    return val
+# Mappa degli Sprint con le date di Actual End
+SPRINT_DATA = [
+    {"name": "NT Sprint 1", "start": "2025-11-16", "end": "2025-11-29"},
+    {"name": "NT Sprint 2", "start": "2025-11-30", "end": "2025-12-15"},
+    {"name": "NT Sprint 3", "start": "2025-12-16", "end": "2026-01-04"},
+    {"name": "NT Sprint 4", "start": "2026-01-05", "end": "2026-01-18"},
+    {"name": "NT Sprint 5", "start": "2026-01-19", "end": "2026-02-03"},
+    {"name": "NT Sprint 6", "start": "2026-02-04", "end": "2026-02-17"},
+]
 
-def get_pr_stats(org, repo_name, token):
-    headers = {
-        "Authorization": f"token {token}",
-        "Accept": "application/vnd.github.v3+json"
-    }
-    url = f"https://api.github.com/repos/{org}/{repo_name}/pulls"
-    durations = []
-    page = 1
-    
-    since_date = datetime.now(timezone.utc) - timedelta(days=LOOKBACK_DAYS)
-    
-    print(f"Recupero PR degli ultimi {LOOKBACK_DAYS} giorni da: {repo_name}...")
-    
-    stop_pagination = False
-    while not stop_pagination:
-        params = {
-            "state": "closed", 
-            "per_page": 100,
-            "page": page,
-            "sort": "created",
-            "direction": "desc"
-        }
-        response = requests.get(url, headers=headers, params=params)
-        response.raise_for_status()
+def get_sprint_info(created_at_dt):
+    """Ritorna il nome e il timestamp formattato dello sprint per una data PR."""
+    for s in SPRINT_DATA:
+        start = datetime.fromisoformat(s["start"]).replace(tzinfo=timezone.utc)
+        # Actual end considerato fino a fine giornata
+        actual_end_dt = datetime.fromisoformat(s["end"]).replace(tzinfo=timezone.utc)
+        limit_end = actual_end_dt + timedelta(days=1)
         
-        data = response.json()
-        if not data:
-            break
-            
-        for pr in data:
-            created_at = datetime.fromisoformat(pr["created_at"].replace("Z", "+00:00"))
-            
-            # Se la PR è più vecchia di 14 giorni, interrompiamo il ciclo
-            if created_at < since_date:
-                stop_pagination = True
-                break
-            
-            # Calcoliamo la durata solo se è stata effettivamente mergiata
-            if pr.get("merged_at"):
-                merged_at = datetime.fromisoformat(pr["merged_at"].replace("Z", "+00:00"))
-                diff_seconds = (merged_at - created_at).total_seconds()
-                durations.append(diff_seconds)
-        
-        page += 1
-                
-    return durations
-
-def upload_to_sheets(avg_hours, pr_count, credentials):
-    """Carica i risultati della PR Resolution sul foglio Google."""
-    client = gspread.authorize(credentials)
-    spreadsheet = client.open(SPREADSHEET_NAME)
-
-    try:
-        worksheet = spreadsheet.worksheet(SHEET_NAME)
-    except gspread.WorksheetNotFound:
-        worksheet = spreadsheet.add_worksheet(title=SHEET_NAME, rows=1000, cols=3)
-        # Corretto l'ordine dei parametri per evitare il DeprecationWarning
-        worksheet.update(values=[["Timestamp", "Numero PR", "Media Risoluzione (Ore)"]], range_name="A1:C1")
-
-    timestamp = datetime.now(timezone.utc).isoformat()
-    worksheet.append_row([timestamp, pr_count, round(avg_hours, 2)])
-    print(f"Dati inviati a Google Sheets nel foglio '{SHEET_NAME}'.")
+        if start <= created_at_dt < limit_end:
+            # Formattazione richiesta: yyyy-mm-ddThh:mm:ss.000000+00:00
+            # Usiamo le 23:00:00 per coerenza con i tuoi screenshot precedenti
+            formatted_ts = actual_end_dt.replace(hour=23, minute=0, second=0).strftime('%Y-%m-%dT%H:%M:%S.000000+00:00')
+            return s["name"], formatted_ts
+    return None, None
 
 def main():
-    token = get_env_var("ORG_GITHUB_TOKEN")
-    org = get_env_var("GITHUB_ORG")
+    token = os.environ.get("ORG_GITHUB_TOKEN")
+    org = os.environ.get("GITHUB_ORG")
     
-    # 1. Recupero dati GitHub filtrati per data
-    durations = get_pr_stats(org, TARGET_REPO, token)
+    headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
+    url = f"https://api.github.com/repos/{org}/{TARGET_REPO}/pulls?state=closed&per_page=100"
+    
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    prs = response.json()
 
-    if not durations:
-        print(f"Nessuna PR mergiata trovata negli ultimi {LOOKBACK_DAYS} giorni.")
-        return
+    stats_per_sprint = {}
 
-    avg_hours = (sum(durations) / len(durations)) / 3600
-    pr_count = len(durations)
+    for pr in prs:
+        if pr.get("merged_at"):
+            created_at = datetime.fromisoformat(pr["created_at"].replace("Z", "+00:00"))
+            merged_at = datetime.fromisoformat(pr["merged_at"].replace("Z", "+00:00"))
+            
+            sprint_name, sprint_timestamp = get_sprint_info(created_at)
+            
+            if sprint_name:
+                diff_hours = (merged_at - created_at).total_seconds() / 3600
+                if sprint_name not in stats_per_sprint:
+                    stats_per_sprint[sprint_name] = {"ts": sprint_timestamp, "durations": []}
+                stats_per_sprint[sprint_name]["durations"].append(diff_hours)
 
-    print(f"\nRisultato: {pr_count} PR analizzate (ultimi {LOOKBACK_DAYS}gg). Media: {avg_hours:.2f} ore.")
+    rows_to_upload = []
+    for name, data in stats_per_sprint.items():
+        avg_hours = sum(data["durations"]) / len(data["durations"])
+        rows_to_upload.append([data["ts"], name, len(data["durations"]), round(avg_hours, 2)])
 
-    # 2. Caricamento Google Sheets
-    try:
-        creds_json = json.loads(get_env_var("GOOGLE_CREDENTIALS_JSON"))
-        scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-        creds = Credentials.from_service_account_info(creds_json, scopes=scopes)
-        upload_to_sheets(avg_hours, pr_count, creds)
-    except Exception as e:
-        print(f"Errore caricamento Sheets: {e}")
+    # Ordina per timestamp
+    rows_to_upload.sort(key=lambda x: x[0])
+
+    if rows_to_upload:
+        try:
+            creds_json = json.loads(os.environ.get("GOOGLE_CREDENTIALS_JSON"))
+            creds = Credentials.from_service_account_info(creds_json, scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
+            client = gspread.authorize(creds)
+            
+            sh = client.open(SPREADSHEET_NAME)
+            worksheet = sh.worksheet(SHEET_NAME)
+
+            # Pulizia e aggiornamento
+            worksheet.clear()
+            header = [["Timestamp", "Sprint Name", "Numero PR", "Media Risoluzione (Ore)"]]
+            worksheet.update(values=header, range_name="A1:D1")
+            worksheet.append_rows(rows_to_upload)
+            
+            print(f"Tabella aggiornata con successo nel formato timestamp richiesto.")
+        except Exception as e:
+            print(f"Errore: {e}")
 
 if __name__ == "__main__":
     main()
