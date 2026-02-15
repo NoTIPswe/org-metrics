@@ -14,7 +14,7 @@ load_dotenv()
 # ── Configuration ────────────────────────────
 JIRA_URL = os.environ["JIRA_URL"]
 JIRA_EMAIL = os.environ["JIRA_EMAIL"]
-JIRA_TOKEN = os.environ["JIRA_TOKEN"]
+JIRA_API_TOKEN = os.environ["JIRA_API_TOKEN"]
 PROJECT_KEY = os.environ.get("JIRA_PROJECT_KEY", "NT")
 SPRINT_NAME = os.environ["JIRA_SPRINT_NAME"]
 
@@ -26,7 +26,7 @@ SHEET_NAME = "sprint-velocity-stability"
 
 def connect_jira():
     """Stabilisce la connessione con JIRA."""
-    return JIRA(server=JIRA_URL, basic_auth=(JIRA_EMAIL, JIRA_TOKEN))
+    return JIRA(server=JIRA_URL, basic_auth=(JIRA_EMAIL, JIRA_API_TOKEN))
 
 def get_project_sprints(jira):
     """Recupera tutti gli sprint del progetto ordinati cronologicamente."""
@@ -110,7 +110,12 @@ def get_google_credentials():
 def append_to_google_sheet(result, credentials):
     """Carica i dati su Google Sheets."""
     client = gspread.authorize(credentials)
-    spreadsheet = client.open(SPREADSHEET_NAME)
+    client: gspread.Client = gspread.authorize(credentials)
+
+    try:
+        spreadsheet: gspread.Spreadsheet = client.open("notip-dashboard")
+    except gspread.SpreadsheetNotFound:
+        spreadsheet = client.open_by_key("10oebZdOQ3V6xdN9PDHuovwrSslg6_UaaWZx9xd7SnmE")
 
     try:
         worksheet = spreadsheet.worksheet(SHEET_NAME)
