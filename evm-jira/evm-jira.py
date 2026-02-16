@@ -34,10 +34,25 @@ HOURLY_RATES = {
 DEFAULT_RATE = 35.0
 
 SHEET_COLUMNS = [
-    "Timestamp", "Sprint corrente", "Numero sprint",
-    "BAC (€)", "EV (€)", "PV (€)", "AC (€)",
-    "CPI", "SPI", "EAC (€)", "ETC (€)", "TEAC (giorni)", "Burn Rate (€/giorno)",
-    "Sprint EV (€)", "Sprint PV (€)", "Sprint AC (€)", "Sprint CPI", "Sprint SPI",
+    "Timestamp",
+    "Sprint corrente",
+    "Numero sprint",
+    "BAC (€)",
+    "EV (€)",
+    "PV (€)",
+    "AC (€)",
+    "CPI",
+    "SPI",
+    "EAC (€)",
+    "ETC (€)",
+    "TEAC (giorni)",
+    "Burn Rate (€/giorno)",
+    "Sprint EV (€)",
+    "Sprint PV (€)",
+    "Sprint AC (€)",
+    "Sprint CPI",
+    "Sprint SPI",
+    "Sprint Burn Rate (€/giorno)",
 ]
 
 ISSUE_FIELDS = f"key,issuetype,status,timeoriginalestimate,timespent,{ROLE_FIELD_ID}"
@@ -70,7 +85,9 @@ def get_project_sprints(jira):
 def fetch_issues(jira, sprint_ids):
     ids_str = ", ".join(str(sid) for sid in sprint_ids)
     return jira.search_issues(
-        f"sprint in ({ids_str})", maxResults=False, fields=ISSUE_FIELDS,
+        f"sprint in ({ids_str})",
+        maxResults=False,
+        fields=ISSUE_FIELDS,
     )
 
 
@@ -111,11 +128,13 @@ def build_evm_dataframe(issues):
         spent_h = _seconds_to_hours(issue.fields.timespent)
         pv = estimated_h * rate
 
-        rows.append({
-            "PV": round(pv, 2),
-            "EV": round(pv if _is_done(issue) else 0.0, 2),
-            "AC": round(spent_h * rate, 2),
-        })
+        rows.append(
+            {
+                "PV": round(pv, 2),
+                "EV": round(pv if _is_done(issue) else 0.0, 2),
+                "AC": round(spent_h * rate, 2),
+            }
+        )
 
     return pd.DataFrame(rows)
 
@@ -139,19 +158,19 @@ def compute_full_metrics(df, days_elapsed):
     ev, ac, spi = base["EV (€)"], base["AC (€)"], base["SPI"]
     cpi = base["CPI"]
     eac = ac + _safe_div(BAC - ev, cpi)
-    base.update({
-        "EAC (€)": round(eac, 2),
-        "ETC (€)": round(eac - ac, 2),
-        "TEAC (giorni)": round(_safe_div(PROJECT_PLANNED_DAYS, spi), 2),
-        "Burn Rate (€/giorno)": round(_safe_div(ac, days_elapsed), 2),
-    })
+    base.update(
+        {
+            "EAC (€)": round(eac, 2),
+            "ETC (€)": round(eac - ac, 2),
+            "TEAC (giorni)": round(_safe_div(PROJECT_PLANNED_DAYS, spi), 2),
+            "Burn Rate (€/giorno)": round(_safe_div(ac, days_elapsed), 2),
+        }
+    )
     return base
 
 
 def compute_days_elapsed(sprints):
-    start = datetime.fromisoformat(
-        sprints[0].startDate.replace("Z", "+00:00")
-    ).date()
+    start = datetime.fromisoformat(sprints[0].startDate.replace("Z", "+00:00")).date()
     return (date.today() - start).days
 
 
@@ -178,9 +197,22 @@ def collect_cumulative_metrics(jira):
 
     df_current = build_evm_dataframe(fetch_issues(jira, [current.id]))
     if df_current.empty:
-        m.update({k: 0 for k in SHEET_COLUMNS if k.startswith("Sprint ") and k != "Sprint corrente"})
+        m.update(
+            {
+                k: 0
+                for k in SHEET_COLUMNS
+                if k.startswith("Sprint ") and k != "Sprint corrente"
+            }
+        )
     else:
         m.update(aggregate_evm(df_current, prefix="Sprint"))
+        sprint_start = datetime.fromisoformat(
+            current.startDate.replace("Z", "+00:00")
+        ).date()
+        sprint_days_elapsed = max((date.today() - sprint_start).days, 1)
+        m["Sprint Burn Rate (€/giorno)"] = round(
+            _safe_div(m["Sprint AC (€)"], sprint_days_elapsed), 2
+        )
 
     return m
 
@@ -204,7 +236,9 @@ def append_to_google_sheet(metrics):
         worksheet = spreadsheet.worksheet("evm-jira")
     except gspread.WorksheetNotFound:
         worksheet = spreadsheet.add_worksheet(
-            title="evm-jira", rows=1000, cols=len(SHEET_COLUMNS),
+            title="evm-jira",
+            rows=1000,
+            cols=len(SHEET_COLUMNS),
         )
         col_end = chr(ord("A") + len(SHEET_COLUMNS) - 1)
         worksheet.update(f"A1:{col_end}1", [SHEET_COLUMNS])
@@ -250,11 +284,13 @@ def print_summary(metrics, sprint_name):
 def main():
     parser = argparse.ArgumentParser(description="EVM metrics from Jira")
     parser.add_argument(
-        "--export-csv", metavar="FILE",
+        "--export-csv",
+        metavar="FILE",
         help="Esporta snapshot con timestamp (append se il file esiste)",
     )
     parser.add_argument(
-        "--google-sheet", action="store_true",
+        "--google-sheet",
+        action="store_true",
         help="Invia le metriche al Google Sheet notip-dashboard/evm-jira",
     )
     args = parser.parse_args()
