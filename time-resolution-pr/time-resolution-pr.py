@@ -26,13 +26,11 @@ def get_sprint_info(created_at_dt):
     """Ritorna il nome e il timestamp formattato dello sprint per una data PR."""
     for s in SPRINT_DATA:
         start = datetime.fromisoformat(s["start"]).replace(tzinfo=timezone.utc)
-        # Actual end considerato fino a fine giornata
         actual_end_dt = datetime.fromisoformat(s["end"]).replace(tzinfo=timezone.utc)
         limit_end = actual_end_dt + timedelta(days=1)
         
         if start <= created_at_dt < limit_end:
             # Formattazione richiesta: yyyy-mm-ddThh:mm:ss.000000+00:00
-            # Usiamo le 23:00:00 per coerenza con i tuoi screenshot precedenti
             formatted_ts = actual_end_dt.replace(hour=23, minute=0, second=0).strftime('%Y-%m-%dT%H:%M:%S.000000+00:00')
             return s["name"], formatted_ts
     return None, None
@@ -58,15 +56,17 @@ def main():
             sprint_name, sprint_timestamp = get_sprint_info(created_at)
             
             if sprint_name:
-                diff_hours = (merged_at - created_at).total_seconds() / 3600
+                # Calcolo differenza in GIORNI invece di ORE
+                diff_days = (merged_at - created_at).total_seconds() / 86400  # 86400 secondi in un giorno
                 if sprint_name not in stats_per_sprint:
                     stats_per_sprint[sprint_name] = {"ts": sprint_timestamp, "durations": []}
-                stats_per_sprint[sprint_name]["durations"].append(diff_hours)
+                stats_per_sprint[sprint_name]["durations"].append(diff_days)
 
     rows_to_upload = []
     for name, data in stats_per_sprint.items():
-        avg_hours = sum(data["durations"]) / len(data["durations"])
-        rows_to_upload.append([data["ts"], name, len(data["durations"]), round(avg_hours, 2)])
+        avg_days = sum(data["durations"]) / len(data["durations"])
+        # Aggiungiamo il valore arrotondato alla riga
+        rows_to_upload.append([data["ts"], name, len(data["durations"]), round(avg_days, 2)])
 
     # Ordina per timestamp
     rows_to_upload.sort(key=lambda x: x[0])
@@ -82,11 +82,12 @@ def main():
 
             # Pulizia e aggiornamento
             worksheet.clear()
-            header = [["Timestamp", "Sprint Name", "Numero PR", "Media Risoluzione (Ore)"]]
+            # Header aggiornato con "Giorni"
+            header = [["Timestamp", "Sprint Name", "Numero PR", "Media Risoluzione (Giorni)"]]
             worksheet.update(values=header, range_name="A1:D1")
             worksheet.append_rows(rows_to_upload)
             
-            print(f"Tabella aggiornata con successo nel formato timestamp richiesto.")
+            print(f"Tabella aggiornata con successo. Metrica convertita in Giorni.")
         except Exception as e:
             print(f"Errore: {e}")
 
