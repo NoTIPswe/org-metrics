@@ -56,7 +56,8 @@ def get_sprint_history(jira, target_name):
     sys.exit(1)
 
 def calculate_stability(jira, sprint_history):
-    """Calcola la stabilità basata sulle ore effettive (timespent)."""
+    """Calcola la stabilità e raccoglie i dati per ogni singolo sprint."""
+    sprint_details = []
     velocities = []
     closed_sprints = [s for s in sprint_history if getattr(s, "state", "").lower() == "closed"]
     
@@ -66,32 +67,29 @@ def calculate_stability(jira, sprint_history):
         jql = f'sprint = {sprint.id} AND statusCategory = "done"'
         issues = jira.search_issues(jql, fields="timespent")
         
-        # Somma timespent (secondi) e conversione in ore
         total_seconds = sum(getattr(issue.fields, 'timespent', 0) or 0 for issue in issues)
-        hours_velocity = total_seconds / 3600.0
+        hours_velocity = round(total_seconds / 3600.0, 2)
         
         velocities.append(hours_velocity)
+        # Salviamo il dettaglio del singolo sprint
+        sprint_details.append({
+            "sprint_name": sprint.name,
+            "hours": hours_velocity
+        })
         print(f" - {sprint.name}: {hours_velocity:.2f} ore")
 
-    if not velocities or len(velocities) < 2:
+    if not velocities:
         return None
 
     media = np.mean(velocities)
     deviazione = np.std(velocities)
-    
-    # Formula: 1 - (std_dev / mean)
-    stability_decimal = 1 - (deviazione / media) if media > 0 else 0.0
-    stability_pct = stability_decimal * 100
-    variability_pct = (deviazione / media) * 100 if media > 0 else 100.0
+    stability_pct = (1 - (deviazione / media)) * 100 if media > 0 else 0.0
     
     return {
-        "stability_pct": round(stability_pct, 2),
-        "variability_pct": round(variability_pct, 2),
-        "media": round(media, 2),
-        "deviazione": round(deviazione, 2),
-        "num_sprints": len(velocities)
+        "stability_overall": round(stability_pct, 2),
+        "media_overall": round(media, 2),
+        "details": sprint_details  # <--- Nuova lista con i dati singoli
     }
-
 # ── Google Sheets Functions ──────────────────
 
 def get_google_credentials():
@@ -108,33 +106,37 @@ def get_google_credentials():
     return Credentials.from_service_account_info(creds_info, scopes=scopes)
 
 def append_to_google_sheet(result, credentials):
-    """Carica i dati su Google Sheets."""
+    """Carica i dati di ogni singolo sprint su Google Sheets."""
     client = gspread.authorize(credentials)
-    client: gspread.Client = gspread.authorize(credentials)
-
+    
     try:
-        spreadsheet: gspread.Spreadsheet = client.open("notip-dashboard")
+        spreadsheet = client.open(SPREADSHEET_NAME)
     except gspread.SpreadsheetNotFound:
+        # Sostituisci con il tuo ID se necessario
         spreadsheet = client.open_by_key("10oebZdOQ3V6xdN9PDHuovwrSslg6_UaaWZx9xd7SnmE")
 
     try:
         worksheet = spreadsheet.worksheet(SHEET_NAME)
     except gspread.WorksheetNotFound:
-        worksheet = spreadsheet.add_worksheet(title=SHEET_NAME, rows=1000, cols=6)
-        worksheet.update("A1:F1", [["Timestamp", "Sprint Target", "Media (h)", "Deviazione (h)", "Variabilità %", "Stabilità %"]])
+        worksheet = spreadsheet.add_worksheet(title=SHEET_NAME, rows=1000, cols=5)
+        # Header più pulito per dati granulari
+        worksheet.update("A1:E1", [["Timestamp", "Sprint Name", "Ore Effettive (h)", "Media Globale (h)", "Stabilità Globale %"]])
 
     timestamp = datetime.now(timezone.utc).isoformat()
-    new_row = [
-        timestamp,
-        SPRINT_NAME,
-        result['media'],
-        result['deviazione'],
-        f"{result['variability_pct']}%",
-        f"{result['stability_pct']}%"
-    ]
-    worksheet.append_row(new_row)
-    print(f"Dati aggiunti al foglio '{SHEET_NAME}' con successo.")
-
+    
+    # Prepariamo le righe da inserire (bulk upload è più veloce)
+    rows_to_append = []
+    for entry in result['details']:
+        rows_to_append.append([
+            timestamp,
+            entry['sprint_name'],
+            entry['hours'],
+            result['media_overall'],
+            f"{result['stability_overall']}%"
+        ])
+    
+    worksheet.append_rows(rows_to_append)
+    print(f"Caricate {len(rows_to_append)} righe su '{SHEET_NAME}'.")
 # ── Main ─────────────────────────────────────
 
 def main():
