@@ -3,6 +3,7 @@ from datetime import date, datetime, timezone
 import json
 import os
 import sys
+import time
 
 from dotenv import load_dotenv
 from google.oauth2.service_account import Credentials
@@ -200,19 +201,30 @@ def append_to_google_sheet(metrics):
     client = gspread.authorize(creds)
     spreadsheet = client.open("notip-dashboard")
 
-    try:
-        worksheet = spreadsheet.worksheet("evm-jira")
-    except gspread.WorksheetNotFound:
-        worksheet = spreadsheet.add_worksheet(
-            title="evm-jira", rows=1000, cols=len(SHEET_COLUMNS),
-        )
-        col_end = chr(ord("A") + len(SHEET_COLUMNS) - 1)
-        worksheet.update(f"A1:{col_end}1", [SHEET_COLUMNS])
+    max_retires = 3
+    for attempt in range(max_retires):
+        try: 
+            try:
+                worksheet = spreadsheet.worksheet("evm-jira")
+            except gspread.WorksheetNotFound:
+                worksheet = spreadsheet.add_worksheet(
+                    title="evm-jira", rows=1000, cols=len(SHEET_COLUMNS),
+                )
+                col_end = chr(ord("A") + len(SHEET_COLUMNS) - 1)
+                worksheet.update(f"A1:{col_end}1", [SHEET_COLUMNS])
 
-    timestamp = datetime.now(timezone.utc).isoformat()
-    row = [timestamp] + [metrics[col] for col in SHEET_COLUMNS[1:]]
-    worksheet.append_row(row)
-    print(f"Appended to Google Sheet: {timestamp}")
+            timestamp = datetime.now(timezone.utc).isoformat()
+            row = [timestamp] + [metrics[col] for col in SHEET_COLUMNS[1:]]
+            worksheet.append_row(row)
+            print(f"Appended to Google Sheet: {timestamp}")
+            return 
+        except gspread.exceptions.APIError as e: 
+            if attempt < max_retires - 1:
+                wait = 10 * (2 ** attempt)      # exponential wait
+                print(f"Google API error (attempt { attempt + 1 }/{ max_retires}): {e}. Retrying in {wait} seconds")
+                time.sleep(wait)
+            else: 
+                raise
 
 
 def export_csv(metrics, output_file):
